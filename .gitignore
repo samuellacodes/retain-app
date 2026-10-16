@@ -1,0 +1,22 @@
+
+# Dependencies
+node_modules/
+
+# Environment secrets
+.env
+.env.*
+
+# Allow example environment configuration
+!.env.example
+
+# Build output
+dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor and operating system files
+.vscode/
+.DS_Store
+Thumbs.db
