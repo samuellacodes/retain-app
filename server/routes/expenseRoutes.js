@@ -37,7 +37,6 @@ router.post("/", async (req, res) => {
 
     if (
       !title?.trim() ||
-      !description?.trim() ||
       amount === undefined ||
       amount === null ||
       amount === "" ||
@@ -69,7 +68,7 @@ router.post("/", async (req, res) => {
     const expense = await Expense.create({
       user: req.user._id,
       title: title.trim(),
-      description: description.trim(),
+      description: description?.trim() || "",
       amount: numericAmount,
       category: category.trim(),
       date: parsedDate,
@@ -124,7 +123,6 @@ router.put("/:id", async (req, res) => {
 
     if (
       ("title" in updates && !updates.title?.trim()) ||
-      ("description" in updates && !updates.description?.trim()) ||
       ("category" in updates && !updates.category?.trim())
     ) {
       return res.status(400).json({

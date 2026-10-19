@@ -43,8 +43,15 @@ router.post("/register", async (req, res) => {
       password: hashedPassword,
     });
 
+    const token = jwt.sign(
+      { userId: user._id.toString() },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
     res.status(201).json({
       message: "Account created successfully.",
+      token,
       user: {
         id: user._id,
         name: user.name,
