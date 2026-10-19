@@ -164,6 +164,8 @@ function Dashboard() {
   const [error, setError] = useState("");
   const [budget, setBudget] = useState("");
   const [budgetInput, setBudgetInput] = useState("");
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const [editing, setEditing] = useState<Expense | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({ title: "", amount: "", category: "Food", date: new Date().toISOString().slice(0, 10), paymentMethod: "Cash", description: "", notes: "" });
@@ -186,10 +188,18 @@ function Dashboard() {
       const data = await request("/api/expenses");
       dispatch(setExpenses(Array.isArray(data) ? data : data.expenses || data.data || []));
       try {
-        const budgetData = await request(`/api/budgets?month=${new Date().getMonth() + 1}&year=${new Date().getFullYear()}`);
-        const amount = budgetData.amount ?? budgetData.budget?.amount ?? budgetData.data?.amount;
-        if (amount !== undefined) { setBudget(String(amount)); setBudgetInput(String(amount)); }
-      } catch { /* Budget can be configured below. */ }
+        const budgetData = await request(`/api/budgets/${currentMonth}`);
+        const amount = Number(budgetData.budget);
+        if (amount > 0) {
+          setBudget(String(amount));
+          setBudgetInput(String(amount));
+        } else {
+          setBudget("");
+          setBudgetInput("");
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not load monthly budget");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load expenses");
     } finally {
@@ -252,8 +262,12 @@ function Dashboard() {
 
   async function saveBudget(event: React.FormEvent) {
     event.preventDefault();
+    setError("");
     try {
-      await request("/api/budgets", { method: "POST", body: JSON.stringify({ amount: Number(budgetInput), month: new Date().getMonth() + 1, year: new Date().getFullYear() }) });
+      await request(`/api/budgets/${currentMonth}`, {
+        method: "PUT",
+        body: JSON.stringify({ amount: Number(budgetInput) }),
+      });
       setBudget(budgetInput); setPage("overview");
     } catch (err) { setError(err instanceof Error ? err.message : "Could not save budget"); }
   }
