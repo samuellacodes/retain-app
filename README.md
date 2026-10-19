@@ -13,6 +13,7 @@ The API health check is available at the backend URL above.
 ## Features
 
 - Create an account, sign in, and sign out.
+- Protect signed-in pages and restrict the admin dashboard to admin users.
 - Record, edit, view, and delete personal expenses.
 - Search and filter expenses by category, payment method, and date range; sort by date or amount.
 - Select a report month and view its spending, highest expense, category breakdown, and recent expenses.
@@ -23,7 +24,7 @@ The API health check is available at the backend URL above.
 
 ## Technologies
 
-- Frontend: React, TypeScript, Vite, Redux Toolkit, React Redux
+- Frontend: React, TypeScript, Vite, React Router, Redux Toolkit, React Redux
 - Backend: Node.js, Express, Mongoose
 - Database: MongoDB
 - Authentication: React Context in the client; bcryptjs and JSON Web Tokens in the API

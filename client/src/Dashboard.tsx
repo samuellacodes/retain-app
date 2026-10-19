@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./useAuth";
 import AdminDashboard from "./components/AdminDashboard";
 import BudgetCard from "./components/BudgetCard";
@@ -22,6 +23,8 @@ import { API, type AdminInsights, type Category, type Expense, type ExpenseFormV
 
 export default function Dashboard() {
   const { user, token, logout } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const dispatch = useDispatch();
   const { items, search, category, paymentMethod, startDate, endDate, sort, month, currentPage, pageSize } = useSelector(
     (state: { expenses: ExpenseState }) => state.expenses
@@ -30,7 +33,9 @@ export default function Dashboard() {
   const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
   const displayPage = Math.min(currentPage, pageCount);
   const pageItems = visible.slice((displayPage - 1) * pageSize, displayPage * pageSize);
-  const [page, setPage] = useState<"overview" | "expenses" | "budget" | "admin">("overview");
+  const page = location.pathname === "/admin" ? "admin" :
+    location.pathname === "/expenses" ? "expenses" :
+    location.pathname === "/budget" ? "budget" : "overview";
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [budget, setBudget] = useState("");
@@ -173,7 +178,7 @@ export default function Dashboard() {
       });
       setBudget(budgetInput);
       setLoadedBudgetMonth(month);
-      setPage("overview");
+      navigate("/overview");
     } catch (err) { setError(err instanceof Error ? err.message : "Could not save budget"); }
   }
 
@@ -222,10 +227,10 @@ export default function Dashboard() {
       <aside className="sidebar">
         <div className="sidebar-brand"><span className="brand-mark small">R</span><span>retain<span className="brand-dot">.</span></span></div>
         <p className="nav-caption">WORKSPACE</p>
-        <button className={`nav-link ${page === "overview" ? "active" : ""}`} onClick={() => setPage("overview")}>▦ <span>Overview</span></button>
-        <button className={`nav-link ${page === "expenses" ? "active" : ""}`} onClick={() => setPage("expenses")}>↗ <span>Expenses</span></button>
-        <button className={`nav-link ${page === "budget" ? "active" : ""}`} onClick={() => setPage("budget")}>◷ <span>Budget planner</span></button>
-        {user?.role === "admin" && <><p className="nav-caption admin-caption">ADMINISTRATION</p><button className={`nav-link ${page === "admin" ? "active" : ""}`} onClick={() => setPage("admin")}>▤ <span>Admin insights</span></button></>}
+        <button className={`nav-link ${page === "overview" ? "active" : ""}`} onClick={() => navigate("/overview")}>▦ <span>Overview</span></button>
+        <button className={`nav-link ${page === "expenses" ? "active" : ""}`} onClick={() => navigate("/expenses")}>↗ <span>Expenses</span></button>
+        <button className={`nav-link ${page === "budget" ? "active" : ""}`} onClick={() => navigate("/budget")}>◷ <span>Budget planner</span></button>
+        {user?.role === "admin" && <><p className="nav-caption admin-caption">ADMINISTRATION</p><button className={`nav-link ${page === "admin" ? "active" : ""}`} onClick={() => navigate("/admin")}>▤ <span>Admin insights</span></button></>}
         <div className="sidebar-bottom"><div className="user-avatar">{user?.name?.slice(0, 1).toUpperCase() || "U"}</div><div className="user-info"><strong>{user?.name || "User"}</strong><span>{user?.role || "Member"}</span></div><button className="logout-btn" title="Sign out" onClick={logout}>↗</button></div>
       </aside>
       <main className="main-panel">
@@ -253,7 +258,7 @@ export default function Dashboard() {
             <div className="panel category-panel"><div className="panel-heading"><div><p className="eyebrow">YOUR HABITS</p><h2>Spending by category</h2></div><span className="soft-tag">{new Date(`${month}-01T00:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" })}</span></div>
               {byCategory.length ? <div className="category-list">{byCategory.map(([name, amount], index) => <div className="category-row" key={name}><div className={`category-icon color-${index % 5}`}>{["◈", "⌂", "✦", "◉", "◇"][index % 5]}</div><div className="category-details"><div className="category-label"><strong>{name}</strong><span>{money(amount)}</span></div><div className="progress-track"><div className="progress-fill" style={{ width: `${total ? Math.min(100, amount / total * 100) : 0}%` }} /></div></div></div>)}</div> : <Empty message="Your category breakdown will appear after you add expenses." />}
             </div>
-            <BudgetCard budget={selectedBudget} spent={total} remaining={remaining} money={money} onEdit={() => setPage("budget")} />
+            <BudgetCard budget={selectedBudget} spent={total} remaining={remaining} money={money} onEdit={() => navigate("/budget")} />
           </section>
         </>}
         {page === "admin" && <AdminDashboard
@@ -301,7 +306,7 @@ export default function Dashboard() {
             money={money}
             onEdit={editExpense}
             onDelete={(id) => void deleteExpense(id)}
-            onViewAll={() => setPage("expenses")}
+            onViewAll={() => navigate("/expenses")}
           />
         </section>}
         <footer className="app-footer">Made for clearer money habits <span>·</span> Retain © {new Date().getFullYear()}</footer>
