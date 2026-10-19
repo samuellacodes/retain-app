@@ -12,8 +12,101 @@ router.use(protect);
 // Get the signed-in user's expenses
 router.get("/", async (req, res) => {
   try {
-    const expenses = await Expense.find({ user: req.user._id })
-      .sort({ date: -1 });
+    const filters = { user: req.user._id };
+
+    if (req.query.category && typeof req.query.category !== "string") {
+      return res.status(400).json({ message: "category must be a single value." });
+    }
+    if (req.query.category) {
+      filters.category = req.query.category;
+    }
+
+    const paymentMethods = ["Cash", "Card", "Bank Transfer", "Mobile Money", "Other"];
+    if (req.query.paymentMethod && !paymentMethods.includes(req.query.paymentMethod)) {
+      return res.status(400).json({ message: "Invalid paymentMethod." });
+    }
+    if (req.query.paymentMethod) {
+      filters.paymentMethod = req.query.paymentMethod;
+    }
+
+    if (req.query.search) {
+      if (typeof req.query.search !== "string") {
+        return res.status(400).json({ message: "search must be a single value." });
+      }
+      const search = req.query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filters.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+        { category: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    if (req.query.startDate || req.query.endDate) {
+      const dateFilter = {};
+      if (req.query.startDate) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.startDate)) {
+          return res.status(400).json({ message: "startDate must use YYYY-MM-DD." });
+        }
+        const startDate = new Date(`${req.query.startDate}T00:00:00.000Z`);
+        if (Number.isNaN(startDate.getTime()) || startDate.toISOString().slice(0, 10) !== req.query.startDate) {
+          return res.status(400).json({ message: "Invalid startDate." });
+        }
+        dateFilter.$gte = startDate;
+      }
+      if (req.query.endDate) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.endDate)) {
+          return res.status(400).json({ message: "endDate must use YYYY-MM-DD." });
+        }
+        const endDate = new Date(`${req.query.endDate}T00:00:00.000Z`);
+        if (Number.isNaN(endDate.getTime()) || endDate.toISOString().slice(0, 10) !== req.query.endDate) {
+          return res.status(400).json({ message: "Invalid endDate." });
+        }
+        endDate.setUTCDate(endDate.getUTCDate() + 1);
+        dateFilter.$lt = endDate;
+      }
+      if (dateFilter.$gte && dateFilter.$lt && dateFilter.$gte >= dateFilter.$lt) {
+        return res.status(400).json({ message: "startDate must be on or before endDate." });
+      }
+      filters.date = dateFilter;
+    }
+
+    const sortOptions = {
+      newest: { date: -1 },
+      oldest: { date: 1 },
+      "amount-high": { amount: -1 },
+      "amount-low": { amount: 1 },
+    };
+    if (req.query.sort && (typeof req.query.sort !== "string" || !Object.hasOwn(sortOptions, req.query.sort))) {
+      return res.status(400).json({ message: "Invalid sort order." });
+    }
+    const sort = req.query.sort ? sortOptions[req.query.sort] : sortOptions.newest;
+    const paginated = req.query.page !== undefined || req.query.limit !== undefined;
+
+    if (paginated) {
+      const page = Number(typeof req.query.page === "string" ? req.query.page : 1);
+      const limit = Number(typeof req.query.limit === "string" ? req.query.limit : 10);
+      if (!Number.isInteger(page) || page < 1 || !Number.isInteger(limit) || limit < 1 || limit > 100) {
+        return res.status(400).json({
+          message: "page must be a positive integer and limit must be between 1 and 100.",
+        });
+      }
+
+      const [expenses, totalItems] = await Promise.all([
+        Expense.find(filters).sort(sort).skip((page - 1) * limit).limit(limit),
+        Expense.countDocuments(filters),
+      ]);
+      return res.json({
+        expenses,
+        pagination: {
+          page,
+          limit,
+          totalItems,
+          totalPages: Math.max(1, Math.ceil(totalItems / limit)),
+        },
+      });
+    }
+
+    const expenses = await Expense.find(filters).sort(sort);
 
     res.json(expenses);
   } catch (error) {

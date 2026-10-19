@@ -98,7 +98,11 @@ type ExpenseState = {
   startDate: string;
   endDate: string;
   sort: string;
+  month: string;
+  currentPage: number;
+  pageSize: number;
 };
+const today = new Date();
 const initialState: ExpenseState = {
   items: [],
   search: "",
@@ -107,6 +111,9 @@ const initialState: ExpenseState = {
   startDate: "",
   endDate: "",
   sort: "newest",
+  month: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`,
+  currentPage: 1,
+  pageSize: 10,
 };
 
 const expenseSlice = createSlice({
@@ -122,12 +129,15 @@ const expenseSlice = createSlice({
     removeExpense: (state, action: PayloadAction<string>) => {
       state.items = state.items.filter((e) => e._id !== action.payload);
     },
-    setSearch: (state, action: PayloadAction<string>) => { state.search = action.payload; },
-    setCategory: (state, action: PayloadAction<string>) => { state.category = action.payload; },
-    setPaymentMethod: (state, action: PayloadAction<string>) => { state.paymentMethod = action.payload; },
-    setStartDate: (state, action: PayloadAction<string>) => { state.startDate = action.payload; },
-    setEndDate: (state, action: PayloadAction<string>) => { state.endDate = action.payload; },
-    setSort: (state, action: PayloadAction<string>) => { state.sort = action.payload; },
+    setSearch: (state, action: PayloadAction<string>) => { state.search = action.payload; state.currentPage = 1; },
+    setCategory: (state, action: PayloadAction<string>) => { state.category = action.payload; state.currentPage = 1; },
+    setPaymentMethod: (state, action: PayloadAction<string>) => { state.paymentMethod = action.payload; state.currentPage = 1; },
+    setStartDate: (state, action: PayloadAction<string>) => { state.startDate = action.payload; state.currentPage = 1; },
+    setEndDate: (state, action: PayloadAction<string>) => { state.endDate = action.payload; state.currentPage = 1; },
+    setSort: (state, action: PayloadAction<string>) => { state.sort = action.payload; state.currentPage = 1; },
+    setMonth: (state, action: PayloadAction<string>) => { state.month = action.payload; },
+    setCurrentPage: (state, action: PayloadAction<number>) => { state.currentPage = action.payload; },
+    setPageSize: (state, action: PayloadAction<number>) => { state.pageSize = action.payload; state.currentPage = 1; },
   },
 });
 
@@ -142,6 +152,9 @@ const {
   setStartDate,
   setEndDate,
   setSort,
+  setMonth,
+  setCurrentPage,
+  setPageSize,
 } =
   expenseSlice.actions;
 const store = configureStore({ reducer: { expenses: expenseSlice.reducer } });
@@ -215,17 +228,19 @@ function AuthScreen() {
 function Dashboard() {
   const { user, token, logout } = useAuth();
   const dispatch = useDispatch();
-  const { items, search, category, paymentMethod, startDate, endDate, sort } = useSelector(
+  const { items, search, category, paymentMethod, startDate, endDate, sort, month, currentPage, pageSize } = useSelector(
     (state: { expenses: ExpenseState }) => state.expenses
   );
   const visible = useSelector(selectVisibleExpenses);
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
+  const displayPage = Math.min(currentPage, pageCount);
+  const pageItems = visible.slice((displayPage - 1) * pageSize, displayPage * pageSize);
   const [page, setPage] = useState<"overview" | "expenses" | "budget" | "admin">("overview");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [budget, setBudget] = useState("");
   const [budgetInput, setBudgetInput] = useState("");
-  const now = new Date();
-  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const [loadedBudgetMonth, setLoadedBudgetMonth] = useState("");
   const [editing, setEditing] = useState<Expense | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({ title: "", amount: "", category: "Food", date: new Date().toISOString().slice(0, 10), paymentMethod: "Cash", description: "", notes: "" });
@@ -256,15 +271,6 @@ function Dashboard() {
       } catch (err) {
         if (active) setError(err instanceof Error ? err.message : "Could not load categories");
       }
-      try {
-        const budgetData = await request(`/api/budgets/${currentMonth}`);
-        if (!active) return;
-        const amount = Number(budgetData.budget);
-        setBudget(amount > 0 ? String(amount) : "");
-        setBudgetInput(amount > 0 ? String(amount) : "");
-      } catch (err) {
-        if (active) setError(err instanceof Error ? err.message : "Could not load monthly budget");
-      }
     }).catch((err) => {
       if (active) setError(err instanceof Error ? err.message : "Could not load expenses");
     }).finally(() => {
@@ -272,7 +278,23 @@ function Dashboard() {
     });
 
     return () => { active = false; };
-  }, [currentMonth, dispatch, request]);
+  }, [dispatch, request]);
+
+  useEffect(() => {
+    let active = true;
+    void request(`/api/budgets/${month}`).then((budgetData) => {
+      if (!active) return;
+      const amount = Number(budgetData.budget);
+      setBudget(amount > 0 ? String(amount) : "");
+      setBudgetInput(amount > 0 ? String(amount) : "");
+      setLoadedBudgetMonth(month);
+      setError("");
+    }).catch((err) => {
+      if (active) setError(err instanceof Error ? err.message : "Could not load monthly budget");
+    });
+
+    return () => { active = false; };
+  }, [month, request]);
 
   const loadAdminData = useCallback(async () => {
     const [insights, categories, expenses] = await Promise.all([
@@ -313,13 +335,12 @@ function Dashboard() {
     "Food", "Transport", "Housing", "Shopping", "Health", "Education", "Entertainment", "Bills", "Other",
     ...expenseCategories.map((item) => item.name),
   ])];
-  const monthExpenses = items.filter((e) => {
-    const d = new Date(e.date);
-    const now = new Date();
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  });
+  const monthExpenses = items.filter((expense) => expense.date.slice(0, 7) === month);
   const total = monthExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
-  const remaining = Number(budget || 0) - total;
+  const budgetIsLoaded = loadedBudgetMonth === month;
+  const selectedBudget = budgetIsLoaded ? budget : "";
+  const selectedBudgetInput = budgetIsLoaded ? budgetInput : "";
+  const remaining = Number(selectedBudget || 0) - total;
   const highest = [...monthExpenses].sort((a, b) => b.amount - a.amount)[0];
   const byCategory = Object.entries(monthExpenses.reduce<Record<string, number>>((acc, e) => {
     acc[e.category || "Other"] = (acc[e.category || "Other"] || 0) + Number(e.amount || 0);
@@ -351,11 +372,13 @@ function Dashboard() {
     event.preventDefault();
     setError("");
     try {
-      await request(`/api/budgets/${currentMonth}`, {
+      await request(`/api/budgets/${month}`, {
         method: "PUT",
         body: JSON.stringify({ amount: Number(budgetInput) }),
       });
-      setBudget(budgetInput); setPage("overview");
+      setBudget(budgetInput);
+      setLoadedBudgetMonth(month);
+      setPage("overview");
     } catch (err) { setError(err instanceof Error ? err.message : "Could not save budget"); }
   }
 
@@ -407,22 +430,22 @@ function Dashboard() {
         <div className="sidebar-bottom"><div className="user-avatar">{user?.name?.slice(0, 1).toUpperCase() || "U"}</div><div className="user-info"><strong>{user?.name || "User"}</strong><span>{user?.role || "Member"}</span></div><button className="logout-btn" title="Sign out" onClick={logout}>↗</button></div>
       </aside>
       <main className="main-panel">
-        <header className="topbar"><div><p className="eyebrow">PERSONAL FINANCE</p><h1>{heading}</h1></div><div className="topbar-right"><span className="today-pill">{new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span><div className="user-avatar">{user?.name?.slice(0, 1).toUpperCase() || "U"}</div></div></header>
+        <header className="topbar"><div><p className="eyebrow">PERSONAL FINANCE</p><h1>{heading}</h1></div><div className="topbar-right">{page !== "admin" && <label className="month-picker">Report month<input type="month" value={month} onChange={(event) => dispatch(setMonth(event.target.value))} /></label>}<div className="user-avatar">{user?.name?.slice(0, 1).toUpperCase() || "U"}</div></div></header>
         {error && <div className="notice-error">{error}<button onClick={() => setError("")}>×</button></div>}
-        {page === "budget" && <section className="panel budget-panel"><p className="eyebrow">PLAN AHEAD</p><h2>Set your monthly budget</h2><p className="muted">Choose a limit that works for you this month.</p><form onSubmit={saveBudget} className="budget-form"><label>Budget amount (USD)<input type="number" min="0" step="0.01" required value={budgetInput} onChange={(e) => setBudgetInput(e.target.value)} placeholder="e.g. 500" /></label><button className="primary-btn">Save budget</button></form><div className="budget-summary"><span>Spent this month</span><strong>{money(total)}</strong><span>Budget remaining</span><strong>{money(remaining)}</strong></div></section>}
+        {page === "budget" && <section className="panel budget-panel"><p className="eyebrow">PLAN AHEAD · {new Date(`${month}-01T00:00:00`).toLocaleDateString("en-US", { month: "long", year: "numeric" })}</p><h2>Set your monthly budget</h2><p className="muted">Choose a limit that works for you this month.</p><form onSubmit={saveBudget} className="budget-form"><label>Budget amount (USD)<input type="number" min="0" step="0.01" required disabled={!budgetIsLoaded} value={selectedBudgetInput} onChange={(e) => setBudgetInput(e.target.value)} placeholder="e.g. 500" /></label><button className="primary-btn" disabled={!budgetIsLoaded}>Save budget</button></form><div className="budget-summary"><span>Spent this month</span><strong>{money(total)}</strong><span>Budget remaining</span><strong>{money(remaining)}</strong></div></section>}
         {page === "admin" && <section className="stats-grid"><Stat label="Registered users" value={String(adminData?.registeredUsers ?? "—")} /><Stat label="All expenses" value={String(adminData?.expenseCount ?? "—")} /><Stat label="Total expense value" value={typeof adminData?.totalExpenseValue === "number" ? money(adminData.totalExpenseValue) : "—"} /><Stat label="Expenses this month" value={String(adminData?.currentMonthExpenseCount ?? "—")} /></section>}
         {page !== "budget" && page !== "admin" && <>
           <section className="stats-grid">
-            <Stat label="Total spent this month" value={money(total)} detail={`${monthExpenses.length} transactions`} />
-            <Stat label="Budget remaining" value={budget ? money(remaining) : "Set a budget"} detail={budget ? remaining < 0 ? "Over budget" : remaining < Number(budget) * 0.2 ? "Budget running low" : "You're on track" : "Create a monthly plan"} />
+            <Stat label="Total spent this month" value={money(total)} detail={`${monthExpenses.length} transactions · ${new Date(`${month}-01T00:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" })}`} />
+            <Stat label="Budget remaining" value={selectedBudget ? money(remaining) : "Set a budget"} detail={selectedBudget ? remaining < 0 ? "Over budget" : remaining < Number(selectedBudget) * 0.2 ? "Budget running low" : "You're on track" : "Create a monthly plan"} />
             <Stat label="Highest expense" value={highest ? money(highest.amount) : money(0)} detail={highest?.title || "No expenses yet"} />
             <Stat label="Total transactions" value={String(items.length)} detail="Across all time" />
           </section>
           <section className="content-grid">
-            <div className="panel category-panel"><div className="panel-heading"><div><p className="eyebrow">YOUR HABITS</p><h2>Spending by category</h2></div><span className="soft-tag">This month</span></div>
+            <div className="panel category-panel"><div className="panel-heading"><div><p className="eyebrow">YOUR HABITS</p><h2>Spending by category</h2></div><span className="soft-tag">{new Date(`${month}-01T00:00:00`).toLocaleDateString("en-US", { month: "short", year: "numeric" })}</span></div>
               {byCategory.length ? <div className="category-list">{byCategory.map(([name, amount], index) => <div className="category-row" key={name}><div className={`category-icon color-${index % 5}`}>{["◈", "⌂", "✦", "◉", "◇"][index % 5]}</div><div className="category-details"><div className="category-label"><strong>{name}</strong><span>{money(amount)}</span></div><div className="progress-track"><div className="progress-fill" style={{ width: `${total ? Math.min(100, amount / total * 100) : 0}%` }} /></div></div></div>)}</div> : <Empty message="Your category breakdown will appear after you add expenses." />}
             </div>
-            <div className="panel budget-card"><p className="eyebrow">MONTHLY PLAN</p><h2>{budget ? money(Number(budget)) : "Set your budget"}</h2><p className="muted">Your spending limit for this month</p><div className="budget-ring"><div><strong>{budget ? `${Math.max(0, Math.round(total / Number(budget || 1) * 100))}%` : "—"}</strong><span>used</span></div></div><div className="budget-line"><span>Spent</span><strong>{money(total)}</strong></div><div className="budget-line"><span>Remaining</span><strong className={remaining < 0 ? "text-danger" : ""}>{budget ? money(remaining) : "—"}</strong></div><button className="secondary-btn full-btn" onClick={() => setPage("budget")}>{budget ? "Update budget" : "Create budget"} →</button></div>
+            <div className="panel budget-card"><p className="eyebrow">MONTHLY PLAN</p><h2>{selectedBudget ? money(Number(selectedBudget)) : "Set your budget"}</h2><p className="muted">Your spending limit for this month</p><div className="budget-ring"><div><strong>{selectedBudget ? `${Math.max(0, Math.round(total / Number(selectedBudget || 1) * 100))}%` : "—"}</strong><span>used</span></div></div><div className="budget-line"><span>Spent</span><strong>{money(total)}</strong></div><div className="budget-line"><span>Remaining</span><strong className={remaining < 0 ? "text-danger" : ""}>{selectedBudget ? money(remaining) : "—"}</strong></div><button className="secondary-btn full-btn" onClick={() => setPage("budget")}>{selectedBudget ? "Update budget" : "Create budget"} →</button></div>
           </section>
         </>}
         {page === "admin" && <>
@@ -476,8 +499,20 @@ function Dashboard() {
             <select aria-label="Sort expenses" value={sort} onChange={(e) => dispatch(setSort(e.target.value))}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="amount-high">Highest amount</option><option value="amount-low">Lowest amount</option></select>
           </div>
           {formOpen && <form className="expense-form" onSubmit={saveExpense}><div className="form-title"><h3>{editing ? "Edit expense" : "New expense"}</h3><button type="button" className="close-btn" onClick={() => setFormOpen(false)}>×</button></div><div className="form-grid"><label>Title<input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Groceries" /></label><label>Amount (USD)<input type="number" required min="0.01" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label><label>Category<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{expenseCategoryOptions.map((name) => <option key={name}>{name}</option>)}</select></label><label>Date<input type="date" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></label><label>Payment method<select value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value })}>{["Cash", "Card", "Mobile Money", "Bank Transfer", "Other"].map((p) => <option key={p}>{p}</option>)}</select></label><label>Description<input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><label className="wide-label">Notes<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label></div><div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setFormOpen(false)}>Cancel</button><button className="primary-btn">{editing ? "Save changes" : "Save expense"}</button></div></form>}
-          {loading ? <Empty message="Loading your expenses…" /> : visible.length ? <div className="table-wrap"><table><thead><tr><th>EXPENSE</th><th>CATEGORY</th><th>DATE</th><th>PAYMENT</th><th>AMOUNT</th><th>ACTIONS</th></tr></thead><tbody>{(page === "overview" ? visible.slice(0, 5) : visible).map((e) => <tr key={e._id}><td><strong>{e.title}</strong><small>{e.description || e.notes || "Personal expense"}</small></td><td><span className="category-pill">{e.category}</span></td><td>{e.date ? new Date(e.date).toLocaleDateString() : "—"}</td><td>{e.paymentMethod || "—"}</td><td className="amount-cell">{money(e.amount)}</td><td><button className="table-action" onClick={() => editExpense(e)} title="Edit">✎</button><button className="table-action danger-action" onClick={() => void deleteExpense(e._id)} title="Delete">×</button></td></tr>)}</tbody></table></div> : <Empty message="No expenses found. Add your first expense to get started." />}
-          <div className="panel-footer"><span>Showing {visible.length ? (page === "overview" ? Math.min(visible.length, 5) : visible.length) : 0} of {visible.length} matching expenses</span><button onClick={() => setPage("expenses")} className="text-btn">View all expenses →</button></div>
+          {loading ? <Empty message="Loading your expenses…" /> : visible.length ? <div className="table-wrap"><table><thead><tr><th>EXPENSE</th><th>CATEGORY</th><th>DATE</th><th>PAYMENT</th><th>AMOUNT</th><th>ACTIONS</th></tr></thead><tbody>{(page === "overview" ? visible.slice(0, 5) : pageItems).map((e) => <tr key={e._id}><td><strong>{e.title}</strong><small>{e.description || e.notes || "Personal expense"}</small></td><td><span className="category-pill">{e.category}</span></td><td>{e.date ? new Date(e.date).toLocaleDateString() : "—"}</td><td>{e.paymentMethod || "—"}</td><td className="amount-cell">{money(e.amount)}</td><td><button className="table-action" onClick={() => editExpense(e)} title="Edit">✎</button><button className="table-action danger-action" onClick={() => void deleteExpense(e._id)} title="Delete">×</button></td></tr>)}</tbody></table></div> : <Empty message="No expenses found. Add your first expense to get started." />}
+          {page === "expenses" && visible.length > 0 && <div className="pagination">
+            <label>Rows per page
+              <select value={pageSize} onChange={(event) => dispatch(setPageSize(Number(event.target.value)))}>
+                {[10, 25, 50].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+            <span>Page {displayPage} of {pageCount}</span>
+            <div className="pagination-actions">
+              <button className="secondary-btn" disabled={displayPage === 1} onClick={() => dispatch(setCurrentPage(displayPage - 1))}>Previous</button>
+              <button className="secondary-btn" disabled={displayPage === pageCount} onClick={() => dispatch(setCurrentPage(displayPage + 1))}>Next</button>
+            </div>
+          </div>}
+          <div className="panel-footer"><span>Showing {visible.length ? (page === "overview" ? Math.min(visible.length, 5) : Math.min(pageSize, visible.length - (displayPage - 1) * pageSize)) : 0} of {visible.length} matching expenses</span><button onClick={() => setPage("expenses")} className="text-btn">View all expenses →</button></div>
         </section>}
         <footer className="app-footer">Made for clearer money habits <span>·</span> Retain © {new Date().getFullYear()}</footer>
       </main>
