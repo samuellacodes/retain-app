@@ -4,11 +4,11 @@ Retain is a personal expense and monthly budget manager. The application has a R
 
 ## Live application
 
-**Frontend website:** 
+**Frontend website:** https://retain-app-nine.vercel.app/
 
 **Backend API:** https://retain-app-u7jd.onrender.com/
 
-The API health check is available at the backend URL above. The assignment submission still needs a publicly accessible frontend website URL.
+The API health check is available at the backend URL above.
 
 ## Features
 
