@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { configureStore, createSlice, type PayloadAction } from "@reduxjs/toolkit";
+import { configureStore, createSelector, createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import "./App.css";
 
@@ -90,8 +90,24 @@ function useAuth() {
   return context;
 }
 
-type ExpenseState = { items: Expense[]; search: string; category: string; sort: string };
-const initialState: ExpenseState = { items: [], search: "", category: "All", sort: "newest" };
+type ExpenseState = {
+  items: Expense[];
+  search: string;
+  category: string;
+  paymentMethod: string;
+  startDate: string;
+  endDate: string;
+  sort: string;
+};
+const initialState: ExpenseState = {
+  items: [],
+  search: "",
+  category: "All",
+  paymentMethod: "All",
+  startDate: "",
+  endDate: "",
+  sort: "newest",
+};
 
 const expenseSlice = createSlice({
   name: "expenses",
@@ -108,13 +124,43 @@ const expenseSlice = createSlice({
     },
     setSearch: (state, action: PayloadAction<string>) => { state.search = action.payload; },
     setCategory: (state, action: PayloadAction<string>) => { state.category = action.payload; },
+    setPaymentMethod: (state, action: PayloadAction<string>) => { state.paymentMethod = action.payload; },
+    setStartDate: (state, action: PayloadAction<string>) => { state.startDate = action.payload; },
+    setEndDate: (state, action: PayloadAction<string>) => { state.endDate = action.payload; },
     setSort: (state, action: PayloadAction<string>) => { state.sort = action.payload; },
   },
 });
 
-const { setExpenses, addExpense, updateExpense, removeExpense, setSearch, setCategory, setSort } =
+const {
+  setExpenses,
+  addExpense,
+  updateExpense,
+  removeExpense,
+  setSearch,
+  setCategory,
+  setPaymentMethod,
+  setStartDate,
+  setEndDate,
+  setSort,
+} =
   expenseSlice.actions;
 const store = configureStore({ reducer: { expenses: expenseSlice.reducer } });
+const selectVisibleExpenses = createSelector(
+  [(state: { expenses: ExpenseState }) => state.expenses],
+  ({ items, search, category, paymentMethod, startDate, endDate, sort }) => {
+    const filtered = items.filter((expense) =>
+      `${expense.title} ${expense.description || ""} ${expense.category}`.toLowerCase().includes(search.toLowerCase()) &&
+      (category === "All" || expense.category === category) &&
+      (paymentMethod === "All" || expense.paymentMethod === paymentMethod) &&
+      (!startDate || expense.date.slice(0, 10) >= startDate) &&
+      (!endDate || expense.date.slice(0, 10) <= endDate)
+    );
+
+    return filtered.sort((a, b) => sort === "oldest" ? Date.parse(a.date) - Date.parse(b.date) :
+      sort === "amount-high" ? b.amount - a.amount : sort === "amount-low" ? a.amount - b.amount :
+      Date.parse(b.date) - Date.parse(a.date));
+  }
+);
 
 function AuthScreen() {
   const { login, register } = useAuth();
@@ -169,9 +215,10 @@ function AuthScreen() {
 function Dashboard() {
   const { user, token, logout } = useAuth();
   const dispatch = useDispatch();
-  const { items, search, category, sort } = useSelector(
+  const { items, search, category, paymentMethod, startDate, endDate, sort } = useSelector(
     (state: { expenses: ExpenseState }) => state.expenses
   );
+  const visible = useSelector(selectVisibleExpenses);
   const [page, setPage] = useState<"overview" | "expenses" | "budget" | "admin">("overview");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -266,16 +313,6 @@ function Dashboard() {
     "Food", "Transport", "Housing", "Shopping", "Health", "Education", "Entertainment", "Bills", "Other",
     ...expenseCategories.map((item) => item.name),
   ])];
-  const visible = useMemo(() => {
-    const filtered = items.filter((e) =>
-      `${e.title} ${e.description || ""} ${e.category}`.toLowerCase().includes(search.toLowerCase()) &&
-      (category === "All" || e.category === category)
-    );
-    return filtered.sort((a, b) => sort === "oldest" ? Date.parse(a.date) - Date.parse(b.date) :
-      sort === "amount-high" ? b.amount - a.amount : sort === "amount-low" ? a.amount - b.amount :
-      Date.parse(b.date) - Date.parse(a.date));
-  }, [items, search, category, sort]);
-
   const monthExpenses = items.filter((e) => {
     const d = new Date(e.date);
     const now = new Date();
@@ -428,7 +465,16 @@ function Dashboard() {
           {!adminData && <Empty message="Loading platform insights…" />}
         </>}
         {page !== "budget" && <section className="panel expenses-panel"><div className="panel-heading"><div><p className="eyebrow">TRANSACTION HISTORY</p><h2>{page === "admin" ? "Your recent expenses" : page === "expenses" ? "All expenses" : "Recent expenses"}</h2></div><button className="primary-btn compact" onClick={() => { setEditing(null); setForm({ title: "", amount: "", category: "Food", date: new Date().toISOString().slice(0, 10), paymentMethod: "Cash", description: "", notes: "" }); setFormOpen(true); }}>+ Add expense</button></div>
-          <div className="filters"><input aria-label="Search expenses" placeholder="Search expenses..." value={search} onChange={(e) => dispatch(setSearch(e.target.value))} /><select aria-label="Filter category" value={category} onChange={(e) => dispatch(setCategory(e.target.value))}>{categories.map((c) => <option key={c}>{c}</option>)}</select><select aria-label="Sort expenses" value={sort} onChange={(e) => dispatch(setSort(e.target.value))}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="amount-high">Highest amount</option><option value="amount-low">Lowest amount</option></select></div>
+          <div className="filters">
+            <input className="filter-search" aria-label="Search expenses" placeholder="Search expenses..." value={search} onChange={(e) => dispatch(setSearch(e.target.value))} />
+            <select aria-label="Filter category" value={category} onChange={(e) => dispatch(setCategory(e.target.value))}>{categories.map((c) => <option key={c}>{c}</option>)}</select>
+            <select aria-label="Filter payment method" value={paymentMethod} onChange={(e) => dispatch(setPaymentMethod(e.target.value))}>
+              {["All", "Cash", "Card", "Mobile Money", "Bank Transfer", "Other"].map((method) => <option key={method}>{method}</option>)}
+            </select>
+            <input type="date" aria-label="Start date" value={startDate} onChange={(e) => dispatch(setStartDate(e.target.value))} />
+            <input type="date" aria-label="End date" value={endDate} min={startDate || undefined} onChange={(e) => dispatch(setEndDate(e.target.value))} />
+            <select aria-label="Sort expenses" value={sort} onChange={(e) => dispatch(setSort(e.target.value))}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="amount-high">Highest amount</option><option value="amount-low">Lowest amount</option></select>
+          </div>
           {formOpen && <form className="expense-form" onSubmit={saveExpense}><div className="form-title"><h3>{editing ? "Edit expense" : "New expense"}</h3><button type="button" className="close-btn" onClick={() => setFormOpen(false)}>×</button></div><div className="form-grid"><label>Title<input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Groceries" /></label><label>Amount (USD)<input type="number" required min="0.01" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label><label>Category<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{expenseCategoryOptions.map((name) => <option key={name}>{name}</option>)}</select></label><label>Date<input type="date" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></label><label>Payment method<select value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value })}>{["Cash", "Card", "Mobile Money", "Bank Transfer", "Other"].map((p) => <option key={p}>{p}</option>)}</select></label><label>Description<input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><label className="wide-label">Notes<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label></div><div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setFormOpen(false)}>Cancel</button><button className="primary-btn">{editing ? "Save changes" : "Save expense"}</button></div></form>}
           {loading ? <Empty message="Loading your expenses…" /> : visible.length ? <div className="table-wrap"><table><thead><tr><th>EXPENSE</th><th>CATEGORY</th><th>DATE</th><th>PAYMENT</th><th>AMOUNT</th><th>ACTIONS</th></tr></thead><tbody>{(page === "overview" ? visible.slice(0, 5) : visible).map((e) => <tr key={e._id}><td><strong>{e.title}</strong><small>{e.description || e.notes || "Personal expense"}</small></td><td><span className="category-pill">{e.category}</span></td><td>{e.date ? new Date(e.date).toLocaleDateString() : "—"}</td><td>{e.paymentMethod || "—"}</td><td className="amount-cell">{money(e.amount)}</td><td><button className="table-action" onClick={() => editExpense(e)} title="Edit">✎</button><button className="table-action danger-action" onClick={() => void deleteExpense(e._id)} title="Delete">×</button></td></tr>)}</tbody></table></div> : <Empty message="No expenses found. Add your first expense to get started." />}
           <div className="panel-footer"><span>Showing {visible.length ? (page === "overview" ? Math.min(visible.length, 5) : visible.length) : 0} of {visible.length} matching expenses</span><button onClick={() => setPage("expenses")} className="text-btn">View all expenses →</button></div>
