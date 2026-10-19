@@ -75,12 +75,14 @@ router.get("/insights", async (req, res) => {
       categoryResults.map((item) => [item._id, item])
     );
 
-    // Include categories even if nobody has used them yet.
-    const spendingByCategory = categoryList.map((category) => {
-      const usage = usageMap.get(category.name);
-
+    const categoryNames = new Set([
+      ...categoryList.map((category) => category.name),
+      ...categoryResults.map((item) => item._id),
+    ]);
+    const spendingByCategory = [...categoryNames].map((name) => {
+      const usage = usageMap.get(name);
       return {
-        category: category.name,
+        category: name,
         usageCount: usage?.usageCount || 0,
         totalSpent: usage?.totalSpent || 0,
       };

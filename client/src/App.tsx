@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { configureStore, createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { Provider, useDispatch, useSelector } from "react-redux";
 import "./App.css";
@@ -15,6 +15,19 @@ type Expense = {
   date: string;
   paymentMethod?: string;
   notes?: string;
+};
+type Category = { _id: string; name: string; description: string };
+type CategoryInsight = { category: string; usageCount: number; totalSpent: number };
+type AdminInsights = {
+  registeredUsers: number;
+  expenseCount: number;
+  totalExpenseValue: number;
+  currentMonthExpenseCount: number;
+  spendingByCategory: CategoryInsight[];
+  topFiveCategories: CategoryInsight[];
+  bottomFiveCategories: CategoryInsight[];
+  recentExpenses: Array<Expense & { user: Pick<User, "name" | "email"> | null; createdAt: string }>;
+  recentUsers: Array<User & { createdAt: string }>;
 };
 
 type AuthValue = {
@@ -169,9 +182,13 @@ function Dashboard() {
   const [editing, setEditing] = useState<Expense | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState({ title: "", amount: "", category: "Food", date: new Date().toISOString().slice(0, 10), paymentMethod: "Cash", description: "", notes: "" });
-  const [adminData, setAdminData] = useState<Record<string, unknown> | null>(null);
+  const [adminData, setAdminData] = useState<AdminInsights | null>(null);
+  const [adminCategories, setAdminCategories] = useState<Category[]>([]);
+  const [expenseCategories, setExpenseCategories] = useState<Category[]>([]);
+  const [categoryForm, setCategoryForm] = useState({ name: "", description: "" });
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
 
-  async function request(path: string, options: RequestInit = {}) {
+  const request = useCallback(async (path: string, options: RequestInit = {}) => {
     const response = await fetch(`${API}${path}`, {
       ...options,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...options.headers },
@@ -179,43 +196,76 @@ function Dashboard() {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || data.error || `Request failed (${response.status})`);
     return data;
-  }
-
-  async function loadData() {
-    setLoading(true);
-    setError("");
-    try {
-      const data = await request("/api/expenses");
-      dispatch(setExpenses(Array.isArray(data) ? data : data.expenses || data.data || []));
-      try {
-        const budgetData = await request(`/api/budgets/${currentMonth}`);
-        const amount = Number(budgetData.budget);
-        if (amount > 0) {
-          setBudget(String(amount));
-          setBudgetInput(String(amount));
-        } else {
-          setBudget("");
-          setBudgetInput("");
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Could not load monthly budget");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load expenses");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { void loadData(); }, [token]);
+  }, [token]);
 
   useEffect(() => {
-    if (page === "admin" && user?.role === "admin") {
-      void request("/api/admin/insights").then((data) => setAdminData(data.insights || data)).catch((err) => setError(err.message));
-    }
-  }, [page]);
+    let active = true;
+    void request("/api/expenses").then(async (data) => {
+      if (!active) return;
+      dispatch(setExpenses(Array.isArray(data) ? data : data.expenses || data.data || []));
+      try {
+        const categories = await request("/api/categories");
+        if (active) setExpenseCategories(categories);
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load categories");
+      }
+      try {
+        const budgetData = await request(`/api/budgets/${currentMonth}`);
+        if (!active) return;
+        const amount = Number(budgetData.budget);
+        setBudget(amount > 0 ? String(amount) : "");
+        setBudgetInput(amount > 0 ? String(amount) : "");
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : "Could not load monthly budget");
+      }
+    }).catch((err) => {
+      if (active) setError(err instanceof Error ? err.message : "Could not load expenses");
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+
+    return () => { active = false; };
+  }, [currentMonth, dispatch, request]);
+
+  const loadAdminData = useCallback(async () => {
+    const [insights, categories, expenses] = await Promise.all([
+      request("/api/admin/insights"),
+      request("/api/categories"),
+      request("/api/expenses"),
+    ]);
+    setAdminData(insights);
+    setAdminCategories(categories);
+    setExpenseCategories(categories);
+    dispatch(setExpenses(Array.isArray(expenses) ? expenses : expenses.expenses || expenses.data || []));
+  }, [dispatch, request]);
+
+  useEffect(() => {
+    if (page !== "admin" || user?.role !== "admin") return;
+
+    let active = true;
+    void Promise.all([
+      request("/api/admin/insights"),
+      request("/api/categories"),
+      request("/api/expenses"),
+    ]).then(([insights, categories, expenses]) => {
+      if (active) {
+        setAdminData(insights);
+        setAdminCategories(categories);
+        setExpenseCategories(categories);
+        dispatch(setExpenses(Array.isArray(expenses) ? expenses : expenses.expenses || expenses.data || []));
+      }
+    }).catch((err) => {
+      if (active) setError(err instanceof Error ? err.message : "Could not load admin data");
+    });
+
+    return () => { active = false; };
+  }, [dispatch, page, request, user?.role]);
 
   const categories = useMemo(() => ["All", ...new Set(items.map((e) => e.category).filter(Boolean))], [items]);
+  const expenseCategoryOptions = [...new Set([
+    "Food", "Transport", "Housing", "Shopping", "Health", "Education", "Entertainment", "Bills", "Other",
+    ...expenseCategories.map((item) => item.name),
+  ])];
   const visible = useMemo(() => {
     const filtered = items.filter((e) =>
       `${e.title} ${e.description || ""} ${e.category}`.toLowerCase().includes(search.toLowerCase()) &&
@@ -272,6 +322,33 @@ function Dashboard() {
     } catch (err) { setError(err instanceof Error ? err.message : "Could not save budget"); }
   }
 
+  async function saveCategory(event: React.FormEvent) {
+    event.preventDefault();
+    setError("");
+    try {
+      await request(editingCategory ? `/api/categories/${editingCategory._id}` : "/api/categories", {
+        method: editingCategory ? "PUT" : "POST",
+        body: JSON.stringify(categoryForm),
+      });
+      setCategoryForm({ name: "", description: "" });
+      setEditingCategory(null);
+      await loadAdminData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save category");
+    }
+  }
+
+  async function deleteCategory(category: Category) {
+    if (!confirm(`Delete "${category.name}"? Expenses using it will be moved to Uncategorized.`)) return;
+    setError("");
+    try {
+      await request(`/api/categories/${category._id}`, { method: "DELETE" });
+      await loadAdminData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete category");
+    }
+  }
+
   function editExpense(expense: Expense) {
     setEditing(expense);
     setForm({ title: expense.title, amount: String(expense.amount), category: expense.category, date: expense.date?.slice(0, 10) || "", paymentMethod: expense.paymentMethod || "Cash", description: expense.description || "", notes: expense.notes || "" });
@@ -311,10 +388,48 @@ function Dashboard() {
             <div className="panel budget-card"><p className="eyebrow">MONTHLY PLAN</p><h2>{budget ? money(Number(budget)) : "Set your budget"}</h2><p className="muted">Your spending limit for this month</p><div className="budget-ring"><div><strong>{budget ? `${Math.max(0, Math.round(total / Number(budget || 1) * 100))}%` : "—"}</strong><span>used</span></div></div><div className="budget-line"><span>Spent</span><strong>{money(total)}</strong></div><div className="budget-line"><span>Remaining</span><strong className={remaining < 0 ? "text-danger" : ""}>{budget ? money(remaining) : "—"}</strong></div><button className="secondary-btn full-btn" onClick={() => setPage("budget")}>{budget ? "Update budget" : "Create budget"} →</button></div>
           </section>
         </>}
-        {page === "admin" && <section className="panel"><div className="panel-heading"><div><p className="eyebrow">ADMINISTRATION</p><h2>Category usage</h2></div></div>{Array.isArray(adminData?.spendingByCategory) && (adminData.spendingByCategory as Array<{ _id?: string; category?: string; total?: number; count?: number }>).map((c, i) => <div className="category-row" key={c._id || c.category || i}><div className="category-details"><div className="category-label"><strong>{c.category || c._id || "Other"}</strong><span>{c.count ?? 0} expenses · {money(c.total ?? 0)}</span></div></div></div>)}{!adminData && <Empty message="Loading platform insights…" />}</section>}
+        {page === "admin" && <>
+          <section className="content-grid admin-insights-grid">
+            <div className="panel">
+              <div className="panel-heading"><div><p className="eyebrow">PLATFORM</p><h2>Spending by category</h2></div></div>
+              {adminData?.spendingByCategory.length ? adminData.spendingByCategory.map((item) => <div className="category-row" key={item.category}><div className="category-details"><div className="category-label"><strong>{item.category}</strong><span>{item.usageCount} expenses · {money(item.totalSpent)}</span></div></div></div>) : <Empty message="No category spending to show yet." />}
+            </div>
+            <div className="panel">
+              <div className="panel-heading"><div><p className="eyebrow">MOST USED</p><h2>Top categories</h2></div></div>
+              {adminData?.topFiveCategories.map((item, index) => <div className="category-row" key={item.category}><div className="category-details"><div className="category-label"><strong>{index + 1}. {item.category}</strong><span>{item.usageCount}</span></div></div></div>)}
+              <div className="panel-heading admin-subheading"><div><p className="eyebrow">LEAST USED</p><h2>Bottom categories</h2></div></div>
+              {adminData?.bottomFiveCategories.map((item) => <div className="category-row" key={item.category}><div className="category-details"><div className="category-label"><strong>{item.category}</strong><span>{item.usageCount}</span></div></div></div>)}
+            </div>
+          </section>
+          <section className="panel">
+            <div className="panel-heading"><div><p className="eyebrow">CATEGORY SETUP</p><h2>{editingCategory ? "Edit category" : "Add a category"}</h2></div></div>
+            <form className="category-form" onSubmit={saveCategory}>
+              <label>Name<input required value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} /></label>
+              <label>Description<input value={categoryForm.description} onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })} /></label>
+              <div className="form-actions">
+                {editingCategory && <button type="button" className="secondary-btn" onClick={() => { setEditingCategory(null); setCategoryForm({ name: "", description: "" }); }}>Cancel edit</button>}
+                <button className="primary-btn">{editingCategory ? "Save category" : "Add category"}</button>
+              </div>
+            </form>
+            {adminCategories.map((item) => <div className="category-row admin-category-row" key={item._id}>
+              <div className="category-details"><div className="category-label"><strong>{item.name}</strong><span>{item.description || "No description"}</span></div></div>
+              <button className="table-action" onClick={() => { setEditingCategory(item); setCategoryForm({ name: item.name, description: item.description }); }}>Edit</button>
+              <button className="table-action danger-action" onClick={() => void deleteCategory(item)} title={`Delete ${item.name}`}>×</button>
+            </div>)}
+          </section>
+          <section className="content-grid admin-insights-grid">
+            <div className="panel"><div className="panel-heading"><div><p className="eyebrow">RECENT ACTIVITY</p><h2>Recently added expenses</h2></div></div>
+              {adminData?.recentExpenses.length ? <div className="table-wrap"><table><thead><tr><th>EXPENSE</th><th>USER</th><th>CATEGORY</th><th>AMOUNT</th></tr></thead><tbody>{adminData.recentExpenses.map((item) => <tr key={item._id}><td>{item.title}</td><td>{item.user?.name || "Unknown"}</td><td>{item.category}</td><td>{money(item.amount)}</td></tr>)}</tbody></table></div> : <Empty message="No expenses recorded yet." />}
+            </div>
+            <div className="panel"><div className="panel-heading"><div><p className="eyebrow">NEW ACCOUNTS</p><h2>Recently registered users</h2></div></div>
+              {adminData?.recentUsers.length ? <div className="table-wrap"><table><thead><tr><th>NAME</th><th>EMAIL</th><th>ROLE</th></tr></thead><tbody>{adminData.recentUsers.map((item) => <tr key={item.id || item._id}><td>{item.name}</td><td>{item.email}</td><td>{item.role}</td></tr>)}</tbody></table></div> : <Empty message="No users registered yet." />}
+            </div>
+          </section>
+          {!adminData && <Empty message="Loading platform insights…" />}
+        </>}
         {page !== "budget" && <section className="panel expenses-panel"><div className="panel-heading"><div><p className="eyebrow">TRANSACTION HISTORY</p><h2>{page === "admin" ? "Your recent expenses" : page === "expenses" ? "All expenses" : "Recent expenses"}</h2></div><button className="primary-btn compact" onClick={() => { setEditing(null); setForm({ title: "", amount: "", category: "Food", date: new Date().toISOString().slice(0, 10), paymentMethod: "Cash", description: "", notes: "" }); setFormOpen(true); }}>+ Add expense</button></div>
           <div className="filters"><input aria-label="Search expenses" placeholder="Search expenses..." value={search} onChange={(e) => dispatch(setSearch(e.target.value))} /><select aria-label="Filter category" value={category} onChange={(e) => dispatch(setCategory(e.target.value))}>{categories.map((c) => <option key={c}>{c}</option>)}</select><select aria-label="Sort expenses" value={sort} onChange={(e) => dispatch(setSort(e.target.value))}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="amount-high">Highest amount</option><option value="amount-low">Lowest amount</option></select></div>
-          {formOpen && <form className="expense-form" onSubmit={saveExpense}><div className="form-title"><h3>{editing ? "Edit expense" : "New expense"}</h3><button type="button" className="close-btn" onClick={() => setFormOpen(false)}>×</button></div><div className="form-grid"><label>Title<input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Groceries" /></label><label>Amount (USD)<input type="number" required min="0.01" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label><label>Category<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{["Food", "Transport", "Housing", "Shopping", "Health", "Education", "Entertainment", "Bills", "Other"].map((c) => <option key={c}>{c}</option>)}</select></label><label>Date<input type="date" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></label><label>Payment method<select value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value })}>{["Cash", "Card", "Mobile Money", "Bank Transfer", "Other"].map((p) => <option key={p}>{p}</option>)}</select></label><label>Description<input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><label className="wide-label">Notes<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label></div><div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setFormOpen(false)}>Cancel</button><button className="primary-btn">{editing ? "Save changes" : "Save expense"}</button></div></form>}
+          {formOpen && <form className="expense-form" onSubmit={saveExpense}><div className="form-title"><h3>{editing ? "Edit expense" : "New expense"}</h3><button type="button" className="close-btn" onClick={() => setFormOpen(false)}>×</button></div><div className="form-grid"><label>Title<input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Groceries" /></label><label>Amount (USD)<input type="number" required min="0.01" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></label><label>Category<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{expenseCategoryOptions.map((name) => <option key={name}>{name}</option>)}</select></label><label>Date<input type="date" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></label><label>Payment method<select value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value })}>{["Cash", "Card", "Mobile Money", "Bank Transfer", "Other"].map((p) => <option key={p}>{p}</option>)}</select></label><label>Description<input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><label className="wide-label">Notes<input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></label></div><div className="form-actions"><button type="button" className="secondary-btn" onClick={() => setFormOpen(false)}>Cancel</button><button className="primary-btn">{editing ? "Save changes" : "Save expense"}</button></div></form>}
           {loading ? <Empty message="Loading your expenses…" /> : visible.length ? <div className="table-wrap"><table><thead><tr><th>EXPENSE</th><th>CATEGORY</th><th>DATE</th><th>PAYMENT</th><th>AMOUNT</th><th>ACTIONS</th></tr></thead><tbody>{(page === "overview" ? visible.slice(0, 5) : visible).map((e) => <tr key={e._id}><td><strong>{e.title}</strong><small>{e.description || e.notes || "Personal expense"}</small></td><td><span className="category-pill">{e.category}</span></td><td>{e.date ? new Date(e.date).toLocaleDateString() : "—"}</td><td>{e.paymentMethod || "—"}</td><td className="amount-cell">{money(e.amount)}</td><td><button className="table-action" onClick={() => editExpense(e)} title="Edit">✎</button><button className="table-action danger-action" onClick={() => void deleteExpense(e._id)} title="Delete">×</button></td></tr>)}</tbody></table></div> : <Empty message="No expenses found. Add your first expense to get started." />}
           <div className="panel-footer"><span>Showing {visible.length ? (page === "overview" ? Math.min(visible.length, 5) : visible.length) : 0} of {visible.length} matching expenses</span><button onClick={() => setPage("expenses")} className="text-btn">View all expenses →</button></div>
         </section>}

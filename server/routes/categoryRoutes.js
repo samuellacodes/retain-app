@@ -2,6 +2,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const Category = require("../models/Category");
+const Expense = require("../models/Expense");
 const { protect, adminOnly } = require("../middleware/authMiddleware");
 
 const router = express.Router();
@@ -69,15 +70,31 @@ router.put("/:id", adminOnly, async (req, res) => {
       return res.status(400).json({ message: "Provide a field to update." });
     }
 
-    const category = await Category.findByIdAndUpdate(
-      req.params.id,
-      { $set: updates },
-      { new: true, runValidators: true }
-    );
+    const category = await Category.findById(req.params.id);
 
     if (!category) {
       return res.status(404).json({ message: "Category not found." });
     }
+
+    const nextName = updates.name;
+    if (nextName && nextName !== category.name) {
+      const duplicate = await Category.findOne({
+        _id: { $ne: category._id },
+        name: nextName,
+      });
+
+      if (duplicate) {
+        return res.status(409).json({ message: "This category already exists." });
+      }
+
+      await Expense.updateMany(
+        { category: category.name },
+        { $set: { category: nextName } }
+      );
+    }
+
+    Object.assign(category, updates);
+    await category.save();
 
     return res.json(category);
   } catch (error) {
@@ -96,11 +113,28 @@ router.delete("/:id", adminOnly, async (req, res) => {
       return res.status(400).json({ message: "Invalid category ID." });
     }
 
-    const category = await Category.findByIdAndDelete(req.params.id);
+    const category = await Category.findById(req.params.id);
 
     if (!category) {
       return res.status(404).json({ message: "Category not found." });
     }
+
+    if (category.name === "Uncategorized") {
+      return res.status(400).json({
+        message: "The Uncategorized category cannot be deleted.",
+      });
+    }
+
+    await Category.updateOne(
+      { name: "Uncategorized" },
+      { $setOnInsert: { name: "Uncategorized" } },
+      { upsert: true }
+    );
+    await Expense.updateMany(
+      { category: category.name },
+      { $set: { category: "Uncategorized" } }
+    );
+    await category.deleteOne();
 
     return res.json({ message: "Category deleted successfully." });
   } catch (error) {
