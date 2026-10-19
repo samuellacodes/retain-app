@@ -41,6 +41,7 @@ type AuthValue = {
 const AuthContext = createContext<AuthValue | null>(null);
 
 function AuthProvider({ children }: { children: React.ReactNode }) {
+  const dispatch = useDispatch();
   const [token, setToken] = useState(() => localStorage.getItem("retain-token") || "");
   const [user, setUser] = useState<User | null>(() => {
     try {
@@ -76,6 +77,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
     logout: () => {
       localStorage.removeItem("retain-token");
       localStorage.removeItem("retain-user");
+      dispatch(resetExpenses());
       setToken("");
       setUser(null);
     },
@@ -121,6 +123,7 @@ const expenseSlice = createSlice({
   initialState,
   reducers: {
     setExpenses: (state, action: PayloadAction<Expense[]>) => { state.items = action.payload; },
+    resetExpenses: () => initialState,
     addExpense: (state, action: PayloadAction<Expense>) => { state.items.unshift(action.payload); },
     updateExpense: (state, action: PayloadAction<Expense>) => {
       const index = state.items.findIndex((e) => e._id === action.payload._id);
@@ -143,6 +146,7 @@ const expenseSlice = createSlice({
 
 const {
   setExpenses,
+  resetExpenses,
   addExpense,
   updateExpense,
   removeExpense,
@@ -531,5 +535,5 @@ function RootApp() {
 }
 
 export default function App() {
-  return <AuthProvider><Provider store={store}><RootApp /></Provider></AuthProvider>;
+  return <Provider store={store}><AuthProvider><RootApp /></AuthProvider></Provider>;
 }
